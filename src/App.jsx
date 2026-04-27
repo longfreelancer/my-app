@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import './index.css'
 import { 
   Sparkles, Copy, RefreshCw, Box, Layers, Zap, Info, 
   CheckCircle2, AlertCircle, Loader2, Wand2, MessageSquareText, Palette, 
