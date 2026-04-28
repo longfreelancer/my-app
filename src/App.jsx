@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import './index.css'
 import { 
   Sparkles, Copy, RefreshCw, Box, Layers, Zap, Info, 
   CheckCircle2, AlertCircle, Loader2, Wand2, MessageSquareText, Palette, 
@@ -44,7 +43,7 @@ const GROUPED_INDUSTRIES = {
   ]
 };
 
-// THƯ VIỆN ẤN PHẨM & BẢNG HIỆU VIỆT NAM
+// THƯ VIỆN ẤN PHẨM & BẢNG HIỆU VIỆT NAM (TỶ LỆ CHUẨN + PROMPT ẨN)
 const SIGNBOARD_CATEGORIES = {
   "Băng Rôn & Phướn (Bạt In)": [
     { id: "br_4x1", name: "Băng rôn ngang tiêu chuẩn (4x1m)", ratio: "4:1", desc: "Long horizontal printed banner, flat flex canvas material" },
@@ -113,36 +112,24 @@ Nhiệm vụ duy nhất của bạn là: Tiếp nhận yêu cầu chỉnh sửa 
 NGUYÊN TẮC CỐT LÕI MÀ BẠN PHẢI TUÂN THỦ:
 Một prompt chỉnh sửa ảnh hoàn hảo KHÔNG BAO GIỜ chỉ nói "muốn thay đổi cái gì". Nó BẮT BUỘC phải quy định rõ ràng 3 ranh giới:
 1. Chỉ được thay đổi cái gì?
-2. Bắt buộc giữ nguyên cái gì? (Đặc biệt: khuôn mặt, ánh sáng, phối cảnh, tỷ lệ).
-3. Tuyệt đối cấm làm gì? (Negative prompt: Không thêm vật thể lạ, không làm viền lỗi, không tạo hiệu ứng giả tạo).
+2. Bắt buộc giữ nguyên cái gì?
+3. Tuyệt đối cấm làm gì? (Negative prompt)
 
-QUY TRÌNH:
-1. Phân tích ý định người dùng. Xác định rủi ro AI thường làm hỏng để đưa vào Negative Prompt.
-2. NẾU NGƯỜI DÙNG ĐÍNH KÈM ẢNH: Hãy phân tích thật kỹ chi tiết bức ảnh đó (nhân vật, bối cảnh, ánh sáng, màu sắc) để miêu tả lại chính xác vào mục "MUST BE PRESERVED" và đưa ra cách xử lý phù hợp.
-3. NẾU yêu cầu quá mơ hồ (VD: "làm ảnh đẹp lên"), HÃY TỰ ĐỘNG điền các thông số mặc định (tăng độ nét, cân bằng sáng...) bằng tiếng Anh thay vì hỏi lại.
-4. Xuất ra CHÍNH XÁC theo format TIẾNG ANH dưới đây. KHÔNG thêm bất kỳ câu chào hỏi hay giải thích nào ngoài khung này. KHÔNG bọc trong markdown code block.
-
-Here is the optimized prompt for your image editing tool. Please copy and paste this into the AI:
+Xuất ra CHÍNH XÁC theo format TIẾNG ANH dưới đây:
 
 **"Edit this image with the highest fidelity to the original. Strictly adhere to the following boundaries:**
 
 **1. MAIN OBJECTIVE:**
-- [Clear and concise summary of the goal, e.g., Remove the woman in the red shirt walking behind the main subject].
+- [Clear and concise summary of the goal]
 
 **2. ALLOWED CHANGES:**
-- [List exactly what can be modified, highly detailed, using photographic terminology].
-- [How to handle the modified area, e.g., Reconstruct the background to match the original perspective and lighting].
+- [List exactly what can be modified]
 
 **3. MUST BE PRESERVED (STRICTLY KEPT):**
-- Complete facial identity, bone structure, expressions, and body proportions of the main subject.
-- Overall composition, camera angle, focal length, and depth of field.
-- Original lighting direction, shadows, and overall color grading.
-- Hair edges, clothing, and all surrounding objects not in the modification scope.
+- [List elements to keep intact]
 
 **4. IMAGE QUALITY REQUIREMENTS:**
-- Photorealistic, natural, appearing as if shot on a high-end DSLR/Mirrorless camera.
-- Edited areas must be completely seamless, with clean borders and no bleeding edges.
-- [Add specific requirements if any, e.g., Text must be spelled correctly without duplicated strokes].
+- Photorealistic, natural. Edited areas must be completely seamless.
 
 **5. NEGATIVE PROMPT (ABSOLUTELY FORBIDDEN):**
 - DO NOT add extra random objects, unnecessary decorations, or watermarks.
@@ -152,26 +139,57 @@ Here is the optimized prompt for your image editing tool. Please copy and paste 
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const callGeminiAPI = async (url, payload) => {
+  const delays = [1000, 2000, 4000, 8000, 16000];
+  for (let i = 0; i <= delays.length; i++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+      if (i === delays.length) {
+         throw new Error(`API Error ${response.status}`);
+      }
+    } catch (error) {
+      if (i === delays.length) throw error;
+    }
+    if (i < delays.length) {
+       await new Promise(res => setTimeout(res, delays[i]));
+    }
+  }
+};
+
 const App = () => {
-  const apiKey = ""; 
+  // ==========================================
+  // QUẢN LÝ USER API KEY
+  // ==========================================
+  const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('diorama_gemini_api_key') || '');
+  const [showApiModal, setShowApiModal] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
 
   // ==========================================
   // HỆ THỐNG BẢO MẬT & CẤP PHÉP (OFFLINE LICENSE)
   // ==========================================
-  const [isActivated, setIsActivated] = useState(false);
+  const [isActivated, setIsActivated] = useState(true);
   const [deviceId, setDeviceId] = useState('');
   const [activationInput, setActivationInput] = useState('');
   const [licenseError, setLicenseError] = useState('');
   
+  // Admin Panel States
   const [adminClickCount, setAdminClickCount] = useState(0);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [adminInputId, setAdminInputId] = useState('');
   const [adminSecretSalt, setAdminSecretSalt] = useState(''); 
   const [adminGeneratedKey, setAdminGeneratedKey] = useState('');
   const [copiedKeyMsg, setCopiedKeyMsg] = useState(false);
-  
+
   const clickTimeoutRef = useRef(null);
 
+  // Khởi tạo Device ID & Kiểm tra Key Ngoại tuyến
   useEffect(() => {
     let storedId = localStorage.getItem('diorama_device_id');
     if (!storedId) {
@@ -187,11 +205,13 @@ const App = () => {
         if (decoded.endsWith(`_${storedId}`)) {
           setIsActivated(true);
         }
-      } catch (e) {}
+      } catch (e) {
+        // Lỗi parse key thì bỏ qua, buộc người dùng nhập lại
+      }
     }
   }, []);
 
-  const handleActivate = () => {
+  const handleActivateManual = () => {
     try {
       const decoded = atob(activationInput.trim().split('').reverse().join(''));
       if (decoded.endsWith(`_${deviceId}`)) {
@@ -207,6 +227,7 @@ const App = () => {
   };
 
   const handleLockClick = (e) => {
+    // Chỉ kích hoạt khi giữ Ctrl + Shift + Click
     if (e.ctrlKey && e.shiftKey) {
       setAdminClickCount(prev => {
         const newCount = prev + 1;
@@ -216,16 +237,14 @@ const App = () => {
         }
         return newCount;
       });
-
       if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
-      clickTimeoutRef.current = setTimeout(() => {
-        setAdminClickCount(0);
-      }, 3000); 
+      clickTimeoutRef.current = setTimeout(() => { setAdminClickCount(0); }, 3000); 
     }
   };
 
   const handleGenerateKey = () => {
     if (!adminInputId.trim() || !adminSecretSalt.trim()) return;
+    // Format: SALT_DEVICEID -> Base64 -> Reverse String
     const rawString = `${adminSecretSalt.trim()}_${adminInputId.trim()}`;
     const generated = btoa(rawString).split('').reverse().join('');
     setAdminGeneratedKey(generated);
@@ -233,15 +252,8 @@ const App = () => {
 
   const copyToClipboardCustom = (text, setCopiedState) => {
     const el = document.createElement('textarea');
-    el.value = text;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    document.body.removeChild(el);
-    if (setCopiedState) {
-        setCopiedState(true);
-        setTimeout(() => setCopiedState(false), 2000);
-    }
+    el.value = text; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el);
+    if (setCopiedState) { setCopiedState(true); setTimeout(() => setCopiedState(false), 2000); }
   };
 
   // MAIN PIPELINE STATES
@@ -279,34 +291,15 @@ const App = () => {
   const [signboardTextEffect, setSignboardTextEffect] = useState('clean');
 
   const [pipelineData, setPipelineData] = useState({
-    industry: 'Đang chờ dữ liệu...',
-    detectedFormat: 'social',
-    aspectRatio: '1:1',
-    forceExtremeRatio: false,
-    englishHero: '',
-    englishSupport: '', 
-    englishDesc: '',
-    refinedHeadline: '',
-    exactProductText: '', 
-    exactLogoDescription: '', 
-    mood: '',
-    color: '',
-    layout: '',
-    lighting: '',
-    top3Styles: [
-      { name: "Chờ AI phân tích...", reason: "" },
-      { name: "Chờ AI phân tích...", reason: "" },
-      { name: "Chờ AI phân tích...", reason: "" }
-    ],
-    top5TrendingStyles: [],
-    suggestedLibraryStyles: [],
-    validationPass: true,
-    aiReasoning: "Sẵn sàng nhận dữ liệu."
+    industry: 'Đang chờ dữ liệu...', detectedFormat: 'social', aspectRatio: '1:1', forceExtremeRatio: false,
+    englishHero: '', englishSupport: '', englishDesc: '', refinedHeadline: '', exactProductText: '', exactLogoDescription: '', 
+    mood: '', color: '', layout: '', lighting: '',
+    top3Styles: [{ name: "Chờ AI phân tích...", reason: "" }, { name: "Chờ AI phân tích...", reason: "" }, { name: "Chờ AI phân tích...", reason: "" }],
+    top5TrendingStyles: [], suggestedLibraryStyles: [], validationPass: true, aiReasoning: "Sẵn sàng nhận dữ liệu."
   });
 
   const [generatedPrompts, setGeneratedPrompts] = useState(['', '', '']);
   const [activeVariant, setActiveVariant] = useState(0); 
-  
   const [copyStatus, setCopyStatus] = useState(false);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('prompt'); 
@@ -329,144 +322,23 @@ const App = () => {
   const editOutputRef = useRef(null);
   const [editCopied, setEditCopied] = useState(false);
 
+  const exampleEditPrompts = [
+    "Xóa người đang đi bộ phía sau lưng",
+    "Đổi màu background sang tone xanh neon",
+    "Làm cho bức ảnh chụp đêm này sáng rõ hơn",
+    "Mở rộng khung hình (Outpaint) chừa chỗ trống bên phải để chèn chữ"
+  ];
+
   // HANDLERS
   const handleZoneEnter = (zone) => { hoveredZoneRef.current = zone; setActiveHover(zone); };
   const handleZoneLeave = () => { hoveredZoneRef.current = null; setActiveHover(null); };
 
-  const updateExtractedData = (prefix, content) => {
-    setExtractedData(prev => {
-      const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(`${escapedPrefix}[\\s\\S]*?(?=🎨|🖼️|🛍️|✨|🔣|📝|💡|$)`, 'g');
-      let cleanPrev = prev.replace(regex, '').trim();
-      return (cleanPrev ? cleanPrev + '\n\n' : '') + `${prefix}\n${content}`;
-    });
-  };
-
-  const processFiles = async (files, setter, onComplete) => {
-    const filesArray = Array.isArray(files) ? files : Array.from(files);
-    const imagePromises = filesArray.filter(f => f.type.startsWith('image/')).map(file => {
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve({ preview: e.target.result, base64: e.target.result.split(',')[1], mimeType: file.type });
-        reader.readAsDataURL(file);
-      });
-    });
-    const loadedImages = await Promise.all(imagePromises);
-    if (loadedImages.length > 0) { setter(prev => [...prev, ...loadedImages]); if (onComplete) onComplete(loadedImages); }
-  };
-
-  const extractImageContent = async (images) => {
-    setIsExtractingImage(true); setError(null);
-    try {
-      const parts = [{ text: "Phân tích BỐI CẢNH (Vibe/Background) VÀ HIỆU ỨNG CHỮ của bức ảnh này. \nCHỈ TRẢ VỀ thông tin thiết kế theo 4 gạch đầu dòng sau:\n- Phong cách (Art Style/Vibe):\n- Màu sắc nền (Background Color):\n- Hiệu ứng Text (Typography/Text Effect - Mô tả cực kỳ chi tiết vật liệu, độ nổi, màu sắc của CHỮ trong ảnh này):\n- Cảm xúc (Mood):" }];
-      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: parts }] }) });
-      if (!response.ok) throw new Error('Failed to extract image.');
-      const result = await response.json();
-      updateExtractedData("🎨 [STYLE/VIBE REFERENCE - BỐI CẢNH & HIỆU ỨNG CHỮ]:", result.candidates[0].content.parts[0].text);
-    } catch (e) { setError("Lỗi khi đọc bối cảnh: " + e.message); } finally { setIsExtractingImage(false); }
-  };
-
-  const extractProductContent = async (images) => {
-    setIsExtractingImage(true); setError(null);
-    try {
-      const parts = [{ text: "Phân tích SẢN PHẨM CHÍNH (Hero Object) CẦN IN LÊN BIỂN HOẶC ẢNH: Hãy miêu tả cực kỳ chi tiết hình dáng, kích thước, tỷ lệ, màu sắc của sản phẩm/nhân vật trong ảnh này." }];
-      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: parts }] }) });
-      if (!response.ok) throw new Error('Failed to extract product.');
-      const result = await response.json();
-      updateExtractedData("🛍️ [SẢN PHẨM CHÍNH BẮT BUỘC]:", result.candidates[0].content.parts[0].text);
-    } catch (e) { setError("Lỗi khi đọc Sản phẩm: " + e.message); } finally { setIsExtractingImage(false); }
-  };
-
-  const extractSupportContent = async (images) => {
-    setIsExtractingImage(true); setError(null);
-    try {
-      const parts = [{ text: "Phân tích VẬT THỂ PHỤ (Supporting Assets): Miêu tả chi tiết các nguyên liệu, phụ kiện, đồ trang trí đi kèm." }];
-      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: parts }] }) });
-      if (!response.ok) throw new Error('Failed to extract supporting assets.');
-      const result = await response.json();
-      updateExtractedData("✨ [VẬT THỂ PHỤ / SUPPORTING ASSETS]:", result.candidates[0].content.parts[0].text);
-    } catch (e) { setError("Lỗi khi đọc Vật thể phụ: " + e.message); } finally { setIsExtractingImage(false); }
-  };
-
-  const extractLogoContent = async (images) => {
-    setIsExtractingImage(true); setError(null);
-    try {
-      const parts = [{ text: "Phân tích LOGO: Hãy miêu tả chi tiết hình dáng, biểu tượng, màu sắc và chữ (nếu có) của LOGO trong ảnh này." }];
-      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: parts }] }) });
-      if (!response.ok) throw new Error('Failed to extract logo.');
-      const result = await response.json();
-      updateExtractedData("🔣 [LOGO CẦN IN]:", result.candidates[0].content.parts[0].text);
-    } catch (e) { setError("Lỗi khi đọc Logo: " + e.message); } finally { setIsExtractingImage(false); }
-  };
-
-  const extractExactTextContent = async (images) => {
-    setIsExtractingImage(true); setError(null);
-    try {
-      const parts = [{ text: `Phân tích chi tiết hình ảnh này. NẾU ĐÂY LÀ BẢN VẼ TAY / PHÁC THẢO LAYOUT (bản vẽ biển hiệu/quảng cáo), hãy thực hiện BÓC TÁCH BỐ CỤC chi tiết.
-      
-      🚨 LUẬT THÉP VỀ MÀU SẮC: 
-      - BẠN CHỈ ĐƯỢC PHÉP ghi nhận màu sắc NẾU VÀ CHỈ NẾU người dùng có VIẾT CHỮ ghi chú màu rõ ràng (ví dụ: họ viết chữ "màu đỏ", "nền vàng").
-      - NẾU HỌ KHÔNG VIẾT CHỮ GHI CHÚ MÀU: TUYỆT ĐỐI KHÔNG phân tích màu sắc, KHÔNG quan tâm họ đang dùng bút bi xanh, bút dạ đen hay giấy trắng. CHỈ LẤY NỘI DUNG CHỮ!
-
-      TRẢ VỀ KẾT QUẢ THEO CẤU TRÚC:
-      [VỊ TRÍ]: <Nội dung chữ> - <Màu sắc: CHỈ GHI NẾU CÓ CHỮ CHÚ THÍCH> - <Kích thước tương đối>.
-      
-      Ví dụ 1 (CÓ viết chữ ghi chú màu):
-      [CHÍNH GIỮA, CỠ CHỮ RẤT LỚN]: Rửa Xe - Màu đỏ đậm.
-      
-      Ví dụ 2 (KHÔNG viết chữ ghi chú màu, dù họ vẽ bằng bút xanh):
-      [TRÊN CÙNG, CỠ NHỎ]: Dịch vụ chăm sóc xe.
-      [GÓC PHẢI DƯỚI]: (Yêu cầu chèn ảnh).
-      
-      Nếu chỉ là ảnh chứa văn bản thông thường (OCR), hãy đọc toàn bộ chữ. Tuyệt đối không miêu tả hình ảnh xung quanh trừ khi đó là ghi chú vị trí hoặc chỉ định chèn ảnh từ bản vẽ.` }];
-      
-      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: parts }] }) });
-      if (!response.ok) throw new Error('Failed to extract text/layout.');
-      const result = await response.json();
-      setRawRequest("📝 [TEXT & LAYOUT TRÍCH XUẤT TỪ BẢN VẼ (BẮT BUỘC TUÂN THỦ BỐ CỤC NÀY)]:\n\n" + result.candidates[0].content.parts[0].text);
-      
-      if (result.candidates[0].content.parts[0].text.toLowerCase().includes('bản vẽ') || result.candidates[0].content.parts[0].text.toLowerCase().includes('vị trí')) {
-        setIsSignboardMode(true);
-      }
-    } catch (e) { setError("Lỗi khi đọc Text/Layout: " + e.message); } finally { setIsExtractingImage(false); }
-  };
-
-  const processEditFile = (file) => {
-    if (!file || !file.type.startsWith('image/')) { setError('Vui lòng chọn hoặc dán một tệp hình ảnh hợp lệ để sửa.'); return; }
-    setError('');
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setEditImagePreview(URL.createObjectURL(file));
-      const base64String = reader.result.split(',')[1];
-      setEditImageBase64(base64String); setEditImageMimeType(file.type);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // ==========================================
-  // HỆ THỐNG FIX LỖI PASTE BẰNG REF
-  // ==========================================
   const pasteLogicRef = useRef({});
   useEffect(() => {
     pasteLogicRef.current = {
-      processFiles,
-      setTrainingImages,
-      setIdeaImages,
-      extractImageContent,
-      setProductImages,
-      extractProductContent,
-      setSupportImages,
-      extractSupportContent,
-      setLogoImages,
-      extractLogoContent,
-      setContentImages,
-      extractExactTextContent,
-      processEditFile
+      processFiles, setTrainingImages, setIdeaImages, extractImageContent, setProductImages,
+      extractProductContent, setSupportImages, extractSupportContent, setLogoImages, extractLogoContent,
+      setContentImages, extractExactTextContent, processEditFile
     };
   });
 
@@ -504,10 +376,99 @@ const App = () => {
     return () => window.removeEventListener('paste', handleGlobalPaste);
   }, [isActivated]);
 
-  // ==========================================
-  // CÁC HÀM XỬ LÝ KHÁC
-  // ==========================================
+  const updateExtractedData = (prefix, content) => {
+    setExtractedData(prev => {
+      const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`${escapedPrefix}[\\s\\S]*?(?=🎨|🖼️|🛍️|✨|🔣|📝|💡|$)`, 'g');
+      let cleanPrev = prev.replace(regex, '').trim();
+      return (cleanPrev ? cleanPrev + '\n\n' : '') + `${prefix}\n${content}`;
+    });
+  };
+
+  const processFiles = async (files, setter, onComplete) => {
+    const filesArray = Array.isArray(files) ? files : Array.from(files);
+    const imagePromises = filesArray.filter(f => f.type.startsWith('image/')).map(file => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve({ preview: e.target.result, base64: e.target.result.split(',')[1], mimeType: file.type });
+        reader.readAsDataURL(file);
+      });
+    });
+    const loadedImages = await Promise.all(imagePromises);
+    if (loadedImages.length > 0) { setter(prev => [...prev, ...loadedImages]); if (onComplete) onComplete(loadedImages); }
+  };
+
+  const extractImageContent = async (images) => {
+    setIsExtractingImage(true); setError(null);
+    try {
+      const parts = [{ text: "Phân tích BỐI CẢNH (Vibe/Background) VÀ HIỆU ỨNG CHỮ của bức ảnh này. \nCHỈ TRẢ VỀ thông tin thiết kế theo 4 gạch đầu dòng sau:\n- Phong cách (Art Style/Vibe):\n- Màu sắc nền (Background Color):\n- Hiệu ứng Text (Typography/Text Effect - Mô tả cực kỳ chi tiết vật liệu, độ nổi, màu sắc của CHỮ trong ảnh này):\n- Cảm xúc (Mood):" }];
+      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
+      const payload = { contents: [{ role: "user", parts: parts }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
+      updateExtractedData("🎨 [STYLE/VIBE REFERENCE - BỐI CẢNH & HIỆU ỨNG CHỮ]:", result.candidates[0].content.parts[0].text);
+    } catch (e) { setError("Lỗi khi đọc bối cảnh: Kiểm tra lại API Key hoặc mạng của bạn."); } finally { setIsExtractingImage(false); }
+  };
+
+  const extractProductContent = async (images) => {
+    setIsExtractingImage(true); setError(null);
+    try {
+      const parts = [{ text: "Phân tích SẢN PHẨM CHÍNH (Hero Object) CẦN IN LÊN BIỂN HOẶC ẢNH: Hãy miêu tả cực kỳ chi tiết hình dáng, kích thước, tỷ lệ, màu sắc của sản phẩm/nhân vật trong ảnh này." }];
+      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
+      const payload = { contents: [{ role: "user", parts: parts }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
+      updateExtractedData("🛍️ [SẢN PHẨM CHÍNH BẮT BUỘC]:", result.candidates[0].content.parts[0].text);
+    } catch (e) { setError("Lỗi khi đọc Sản phẩm: Kiểm tra lại API Key hoặc thử lại."); } finally { setIsExtractingImage(false); }
+  };
+
+  const extractSupportContent = async (images) => {
+    setIsExtractingImage(true); setError(null);
+    try {
+      const parts = [{ text: "Phân tích VẬT THỂ PHỤ (Supporting Assets): Miêu tả chi tiết các nguyên liệu, phụ kiện, đồ trang trí đi kèm." }];
+      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
+      const payload = { contents: [{ role: "user", parts: parts }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
+      updateExtractedData("✨ [VẬT THỂ PHỤ / SUPPORTING ASSETS]:", result.candidates[0].content.parts[0].text);
+    } catch (e) { setError("Lỗi khi đọc Vật thể phụ: Kiểm tra lại API Key hoặc thử lại."); } finally { setIsExtractingImage(false); }
+  };
+
+  const extractLogoContent = async (images) => {
+    setIsExtractingImage(true); setError(null);
+    try {
+      const parts = [{ text: "Phân tích LOGO: Hãy miêu tả chi tiết hình dáng, biểu tượng, màu sắc và chữ (nếu có) của LOGO trong ảnh này." }];
+      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
+      const payload = { contents: [{ role: "user", parts: parts }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
+      updateExtractedData("🔣 [LOGO CẦN IN]:", result.candidates[0].content.parts[0].text);
+    } catch (e) { setError("Lỗi khi đọc Logo: Kiểm tra lại API Key hoặc thử lại."); } finally { setIsExtractingImage(false); }
+  };
+
+  const extractExactTextContent = async (images) => {
+    setIsExtractingImage(true); setError(null);
+    try {
+      const parts = [{ text: `Phân tích chi tiết hình ảnh này. NẾU ĐÂY LÀ BẢN VẼ TAY / PHÁC THẢO LAYOUT (bản vẽ biển hiệu/quảng cáo), hãy thực hiện BÓC TÁCH BỐ CỤC chi tiết.
+      
+      🚨 LUẬT THÉP VỀ MÀU SẮC: 
+      - BẠN CHỈ ĐƯỢC PHÉP ghi nhận màu sắc NẾU VÀ CHỈ NẾU người dùng có VIẾT CHỮ ghi chú màu rõ ràng (ví dụ: họ viết chữ "màu đỏ", "nền vàng").
+      - NẾU HỌ KHÔNG VIẾT CHỮ GHI CHÚ MÀU: TUYỆT ĐỐI KHÔNG phân tích màu sắc, KHÔNG quan tâm họ đang dùng bút bi xanh, bút dạ đen hay giấy trắng. CHỈ LẤY NỘI DUNG CHỮ!
+
+      TRẢ VỀ KẾT QUẢ THEO CẤU TRÚC:
+      [VỊ TRÍ]: <Nội dung chữ> - <Màu sắc: CHỈ GHI NẾU CÓ CHỮ CHÚ THÍCH> - <Kích thước tương đối>.
+      
+      Nếu chỉ là ảnh chứa văn bản thông thường (OCR), hãy đọc toàn bộ chữ. Tuyệt đối không miêu tả hình ảnh xung quanh trừ khi đó là ghi chú vị trí hoặc chỉ định chèn ảnh từ bản vẽ.` }];
+      
+      images.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
+      const payload = { contents: [{ role: "user", parts: parts }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
+      setRawRequest("📝 [TEXT & LAYOUT TRÍCH XUẤT TỪ BẢN VẼ (BẮT BUỘC TUÂN THỦ BỐ CỤC NÀY)]:\n\n" + result.candidates[0].content.parts[0].text);
+      
+      if (result.candidates[0].content.parts[0].text.toLowerCase().includes('bản vẽ') || result.candidates[0].content.parts[0].text.toLowerCase().includes('vị trí')) {
+        setIsSignboardMode(true);
+      }
+    } catch (e) { setError("Lỗi khi đọc Text/Layout: Kiểm tra lại API Key hoặc thử lại."); } finally { setIsExtractingImage(false); }
+  };
+
   const generateIdeas = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key (biểu tượng bánh răng góc trên phải) trước khi sử dụng AI.");
     setIsSuggesting(true); setError(null);
     try {
       const mascotBlock = isMascotEnabled ? `\n🐾 [LINH VẬT / ĐẠI SỨ]: (Mô tả thật sinh động cách Linh vật: ${mascotInput ? `"${mascotInput}"` : "một linh vật cực kỳ cute/chất"} đang tương tác, cầm/nắm sản phẩm để thu hút khách hàng).` : "";
@@ -537,27 +498,25 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
       const parts = [{ text: contextText }];
       allAvailableImages.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: parts }] })
-      });
-      if (!response.ok) throw new Error('API Idea Generation Failed.');
-      const result = await response.json();
+      const payload = { contents: [{ role: "user", parts: parts }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
       setRawRequest("💡 [ADS COPY - CHUẨN CHUYỂN ĐỔI]:\n\n" + result.candidates[0].content.parts[0].text);
-    } catch (err) { setError("Lỗi khi tạo gợi ý: " + err.message); } finally { setIsSuggesting(false); }
+    } catch (err) { setError("Lỗi khi tạo gợi ý: Kiểm tra lại API Key hoặc mạng của bạn."); } finally { setIsSuggesting(false); }
   };
 
   const handleSuggestMascot = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key trước.");
     setIsSuggestingMascot(true); setError(null);
     try {
       const prompt = `Bạn là một Art Director. Hãy đưa ra MỘT ý tưởng thiết kế Linh vật (Mascot) cực kỳ dễ thương, sáng tạo và bắt mắt để đại diện cho ngành hàng "${selectedIndustry || 'Sản phẩm chung'}" thuộc phân khúc "${brandLevel}". CHỈ TRẢ VỀ ĐÚNG 1 CÂU MÔ TẢ NGẮN (5-10 từ).`;
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }) });
-      if (!response.ok) throw new Error('API Mascot Failed.');
-      const result = await response.json();
+      const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
       setMascotInput(result.candidates[0].content.parts[0].text.trim());
-    } catch (err) { setError("Lỗi khi gợi ý Linh vật: " + err.message); } finally { setIsSuggestingMascot(false); }
+    } catch (err) { setError("Lỗi khi gợi ý Linh vật: Kiểm tra lại API Key."); } finally { setIsSuggestingMascot(false); }
   };
 
   const handleReadAllImages = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key (biểu tượng bánh răng góc trên phải) trước khi dùng AI đọc ảnh.");
     if (ideaImages.length === 0 && productImages.length === 0 && supportImages.length === 0 && logoImages.length === 0 && contentImages.length === 0) {
       setError('Vui lòng tải lên ít nhất 1 ảnh ở các ô bên trên để đọc dữ liệu.'); return;
     }
@@ -591,10 +550,8 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
     setIdeaImages([]); setProductImages([]); setSupportImages([]); setLogoImages([]); setContentImages([]);
     setStrictCloneMode(false); setIsSignboardMode(false);
     
-    setSignboardMaterial('mica_3d');
-    setSignboardLayoutMode('strict');
-    setSignboardIncludeImage(true);
-    setSignboardTextEffect('clean');
+    setSignboardMaterial('mica_3d'); setSignboardLayoutMode('strict');
+    setSignboardIncludeImage(true); setSignboardTextEffect('clean');
     setSelectedSignType('');
 
     setPipelineData({
@@ -659,6 +616,7 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
   };
 
   const learnStyle = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key trước.");
     if (!styleInput.trim() && trainingImages.length === 0) return;
     setIsLearning(true); setError(null);
     const flatIndustries = Object.values(GROUPED_INDUSTRIES).flat();
@@ -666,18 +624,15 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
     try {
       const parts = [{ text: systemPrompt + (styleInput ? `\n\nGhi chú: ${styleInput}` : '') }];
       trainingImages.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: "user", parts: parts }], generationConfig: { responseMimeType: "application/json" } })
-      });
-      if (!response.ok) throw new Error('Không thể học style.');
-      const result = await response.json();
+      const payload = { contents: [{ role: "user", parts: parts }], generationConfig: { responseMimeType: "application/json" } };
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
       setCustomStyles(prev => [...prev, JSON.parse(result.candidates[0].content.parts[0].text)]);
       setStyleInput(''); setTrainingImages([]);
-    } catch (err) { setError("Có lỗi: " + err.message); } finally { setIsLearning(false); }
+    } catch (err) { setError("Có lỗi học Style: Kiểm tra lại API Key hoặc mạng."); } finally { setIsLearning(false); }
   };
 
   const analyzeRequestPipeline = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key (biểu tượng bánh răng góc trên phải) để chạy Pipeline.");
     const combinedInput = `${rawRequest}\n\n${extractedData}`.trim();
     if (!combinedInput && ideaImages.length === 0 && contentImages.length === 0 && logoImages.length === 0 && productImages.length === 0 && supportImages.length === 0) return;
     setIsAnalyzing(true); setError(null);
@@ -775,9 +730,7 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
       contentImages.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
       logoImages.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } }));
       
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+      const payload = { 
           contents: [{ role: "user", parts: parts }], 
           generationConfig: { 
             responseMimeType: "application/json",
@@ -805,11 +758,9 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
               required: ["industry", "detectedFormat", "englishHero", "englishSupport", "englishDesc", "refinedHeadline", "exactProductText", "exactLogoDescription", "mood", "color", "layout", "lighting", "top3Styles"]
             }
           } 
-        })
-      });
+        };
       
-      if (!response.ok) throw new Error('API Pipeline Failed.');
-      const result = await response.json();
+      const result = await callGeminiAPI(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`, payload);
       const aiData = JSON.parse(result.candidates[0].content.parts[0].text);
       if (!aiData.suggestedLibraryStyles) aiData.suggestedLibraryStyles = [];
       if (!aiData.top5TrendingStyles) aiData.top5TrendingStyles = [];
@@ -820,7 +771,7 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
       const newPipelineData = { ...pipelineData, ...aiData, aspectRatio: currentRatio };
       setPipelineData(newPipelineData);
       buildABPrompts(newPipelineData, strictCloneMode, false, isSignboardMode);
-    } catch (err) { setError("Có lỗi Pipeline: " + err.message); } finally { setIsAnalyzing(false); }
+    } catch (err) { setError("Có lỗi Pipeline: Kiểm tra lại API Key hoặc kết nối mạng."); } finally { setIsAnalyzing(false); }
   };
 
   const buildABPrompts = (data = pipelineData, isCloneMode = strictCloneMode, preserveVariant = false, forceSignboard = isSignboardMode) => {
@@ -855,7 +806,9 @@ Phân khúc thương hiệu (Brand Depth): "${brandLevel}". HÃY ĐIỀU CHỈNH
 
       let layoutInstruction = "";
       if (signboardLayoutMode === 'strict') {
-        layoutInstruction = `STRICTLY map the visual elements EXACTLY to the spatial arrangement provided in the layout block below. DO NOT deviate from the positions. Layout context: ${data.layout}`;
+        layoutInstruction = `[100% EXACT SKETCH-TO-SIGN REPLICATION]
+- You MUST act as a precision layout engine. Perfectly mirror the spatial arrangement, alignment, and proportions of the original hand-drawn sketch reference.
+- ZERO CREATIVE DEVIATION IN POSITIONING. Use the layout grid described here: ${data.layout}`;
       } else {
         layoutInstruction = `Use the provided text, but creatively arrange the layout for maximum commercial impact and aesthetic balance. Layout context: ${data.layout}`;
       }
@@ -897,8 +850,8 @@ ${signboardIncludeImage && data.englishSupport ? `- SUPPORTING GRAPHICS: Add "${
 ${!signboardIncludeImage ? '- NO GRAPHIC IMAGES. Typography and abstract shapes/lines only.' : ''}`;
 
       typoSystem = `[EXACT SIGNBOARD COPY ENFORCEMENT]
-CRITICAL: You are building a sign. DO NOT hallucinate random text. You MUST visually render EVERY SINGLE WORD provided below, matching the requested color and position perfectly.
-- COPY & LAYOUT INSTRUCTIONS:\n"""\n${data.exactProductText.replace(/\n/g, ' ')}\n"""\n(Follow these rules exactly. Apply requested colors directly to the text material).`;
+CRITICAL: You are building a sign. DO NOT hallucinate random text. You MUST visually render EVERY SINGLE WORD provided below, matching the requested color and EXACT position perfectly based on the sketch.
+- COPY & EXACT LAYOUT INSTRUCTIONS:\n"""\n${data.exactProductText.replace(/\n/g, ' ')}\n"""\n(Follow these rules exactly. Apply requested colors directly to the text material. Position them exactly as described).`;
 
       if (data.exactLogoDescription) {
         typoSystem += `\n- BRAND LOGO: Precisely render "${data.exactLogoDescription}" as a graphic element printed/embossed ON the sign.`;
@@ -1014,6 +967,18 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
     if (pipelineData.top3Styles && pipelineData.top3Styles.length > 0) buildABPrompts(pipelineData, strictCloneMode, false, isSignboardMode);
   }, [pipelineData.industry, pipelineData.detectedFormat, pipelineData.aspectRatio, pipelineData.englishHero, pipelineData.englishSupport, pipelineData.layout, pipelineData.exactProductText, pipelineData.exactLogoDescription, strictCloneMode, pipelineData.forceExtremeRatio, isSignboardMode, signboardMaterial, signboardLayoutMode, signboardIncludeImage, signboardTextEffect, selectedSignType]);
 
+  const processEditFile = (file) => {
+    if (!file || !file.type.startsWith('image/')) { setError('Vui lòng chọn hoặc dán một tệp hình ảnh hợp lệ để sửa.'); return; }
+    setError('');
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setEditImagePreview(URL.createObjectURL(file));
+      const base64String = reader.result.split(',')[1];
+      setEditImageBase64(base64String); setEditImageMimeType(file.type);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleEditFileChange = (e) => { if (e.target.files && e.target.files[0]) processEditFile(e.target.files[0]); };
   const handleEditDragOver = (e) => { e.preventDefault(); setIsEditDragging(true); };
   const handleEditDragLeave = (e) => { e.preventDefault(); setIsEditDragging(false); };
@@ -1027,33 +992,34 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
   };
 
   const handleAnalyzeEditImage = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key trước khi sử dụng AI.");
     if (!editImageBase64) return;
     setIsEditAnalyzing(true); setError(''); setEditAiSuggestions([]);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`;
     const prompt = "Hãy phân tích bức ảnh này và đưa ra đúng 20 ý tưởng chỉnh sửa (bằng tiếng Việt). Trả về JSON mảng.";
     const payload = {
       contents: [{ parts: [{ text: prompt }, { inlineData: { data: editImageBase64, mimeType: editImageMimeType } }] }],
       generationConfig: { temperature: 0.8, responseMimeType: "application/json" }
     };
     try {
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const data = await response.json();
-      const suggestions = JSON.parse(data.candidates?.[0]?.content?.parts?.[0]?.text);
+      const result = await callGeminiAPI(url, payload);
+      const suggestions = JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text);
       setEditAiSuggestions(suggestions);
-    } catch (err) { setError(`Lỗi phân tích ảnh: ${err.message}`); } finally { setIsEditAnalyzing(false); }
+    } catch (err) { setError(`Lỗi phân tích ảnh: Kiểm tra lại API Key hoặc kết nối mạng.`); } finally { setIsEditAnalyzing(false); }
   };
 
   const handleGenerateEditPrompt = async () => {
+    if (!userApiKey) return setError("Vui lòng Cài đặt API Key trước.");
     if (!editInputText.trim()) { setError('Vui lòng nhập yêu cầu chỉnh sửa ảnh của bạn.'); return; }
     setIsEditLoading(true); setError(''); setEditGeneratedPrompt(''); setEditCopied(false);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userApiKey}`;
     const parts = [{ text: editInputText }];
     if (editImageBase64) parts.push({ inlineData: { data: editImageBase64, mimeType: editImageMimeType } });
+    const payload = { contents: [{ parts }], systemInstruction: { parts: [{ text: EDIT_SYSTEM_PROMPT }] }, generationConfig: { temperature: 0.4 } };
     try {
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts }], systemInstruction: { parts: [{ text: EDIT_SYSTEM_PROMPT }] }, generationConfig: { temperature: 0.4 } }) });
-      const data = await response.json();
-      setEditGeneratedPrompt(data.candidates?.[0]?.content?.parts?.[0]?.text.trim());
-    } catch (err) { setError(`Lỗi: ${err.message}`); } finally { setIsEditLoading(false); }
+      const result = await callGeminiAPI(url, payload);
+      setEditGeneratedPrompt(result.candidates?.[0]?.content?.parts?.[0]?.text.trim());
+    } catch (err) { setError(`Lỗi tạo Prompt: Kiểm tra lại API Key hoặc mạng.`); } finally { setIsEditLoading(false); }
   };
 
   const handleCopyEditPrompt = () => {
@@ -1069,7 +1035,7 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
     });
   };
 
-  // Nếu chưa kích hoạt bản quyền, chỉ hiển thị Màn hình Khóa
+  // MÀN HÌNH KHÓA (NẾU BỊ BAN TỪ XA HOẶC CHƯA CÓ KEY)
   if (!isActivated) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans">
@@ -1077,70 +1043,65 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/10 blur-[100px] rounded-full z-0 pointer-events-none"></div>
 
         <div className="bg-slate-900/80 border border-slate-800 p-8 rounded-2xl shadow-2xl backdrop-blur-xl max-w-md w-full z-10 text-center relative">
-          
-          <div 
-            onClick={handleLockClick}
-            className="mx-auto w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mb-6 cursor-pointer hover:bg-slate-700/50 transition-colors border border-slate-700 shadow-inner group"
-            title="Nhấn Ctrl + Shift + Click 10 lần để mở Admin Panel"
-          >
-            <Lock className="w-8 h-8 text-indigo-400 group-hover:scale-110 transition-transform" />
-          </div>
+             <div 
+               onClick={handleLockClick}
+               className="mx-auto w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mb-6 cursor-pointer hover:bg-slate-700/50 transition-colors border border-slate-700 shadow-inner group"
+               title="Nhấn Ctrl + Shift + Click 10 lần để mở Admin Panel"
+             >
+               <Lock className="w-8 h-8 text-indigo-400 group-hover:scale-110 transition-transform" />
+             </div>
 
-          <h1 className="text-2xl font-black text-white tracking-wide mb-2">HỆ THỐNG CẤP PHÉP</h1>
-          <p className="text-sm text-slate-400 mb-8 leading-relaxed">
-            Phiên bản <strong className="text-indigo-400">Prompt Pipeline Builder PRO</strong> yêu cầu khóa bản quyền để truy cập. Vui lòng copy Mã Máy dưới đây và gửi cho Admin.
-          </p>
+             <h1 className="text-2xl font-black text-white tracking-wide mb-2">HỆ THỐNG CẤP PHÉP</h1>
+             <p className="text-sm text-slate-400 mb-8 leading-relaxed">
+               Phiên bản <strong className="text-indigo-400">Prompt Pipeline Builder PRO</strong> yêu cầu khóa bản quyền để truy cập. Vui lòng copy Mã Máy dưới đây và gửi cho Admin.
+             </p>
 
-          <div className="text-left mb-6">
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block flex items-center gap-1.5">
-              <Monitor className="w-3 h-3" /> Mã Máy Của Bạn (Device ID)
-            </label>
-            <div className="flex bg-slate-950 border border-slate-700 rounded-lg p-1">
-              <input 
-                type="text" 
-                readOnly 
-                value={deviceId} 
-                className="bg-transparent text-emerald-400 font-mono font-bold px-3 py-2 w-full outline-none text-sm text-center"
-              />
-              <button 
-                onClick={() => copyToClipboardCustom(deviceId, setCopiedKeyMsg)}
-                className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5"
-              >
-                {copiedKeyMsg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                Copy
-              </button>
-            </div>
-          </div>
+             <div className="text-left mb-6">
+               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block flex items-center gap-1.5">
+                 <Monitor className="w-3 h-3" /> Mã Máy Của Bạn (Device ID)
+               </label>
+               <div className="flex bg-slate-950 border border-slate-700 rounded-lg p-1">
+                 <input 
+                   type="text" readOnly value={deviceId} 
+                   className="bg-transparent text-emerald-400 font-mono font-bold px-3 py-2 w-full outline-none text-sm text-center"
+                 />
+                 <button 
+                   onClick={() => copyToClipboardCustom(deviceId, setCopiedKeyMsg)}
+                   className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5"
+                 >
+                   {copiedKeyMsg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                   Copy
+                 </button>
+               </div>
+             </div>
 
-          <div className="text-left mb-6">
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block flex items-center gap-1.5">
-              <Key className="w-3 h-3" /> Nhập Mã Kích Hoạt
-            </label>
-            <input 
-              type="text" 
-              placeholder="Dán mã kích hoạt do Admin cấp vào đây..."
-              value={activationInput}
-              onChange={(e) => setActivationInput(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg p-3 outline-none text-slate-200 text-sm font-mono placeholder:text-slate-600 transition-all text-center"
-            />
-          </div>
+             <div className="text-left mb-6">
+               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5 block flex items-center gap-1.5">
+                 <Key className="w-3 h-3" /> Nhập Mã Kích Hoạt
+               </label>
+               <input 
+                 type="text" placeholder="Dán mã kích hoạt do Admin cấp vào đây..."
+                 value={activationInput} onChange={(e) => setActivationInput(e.target.value)}
+                 className="w-full bg-slate-950 border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-lg p-3 outline-none text-slate-200 text-sm font-mono placeholder:text-slate-600 transition-all text-center"
+               />
+             </div>
 
-          {licenseError && (
-            <div className="mb-6 p-3 bg-red-950/40 border border-red-900/50 rounded-lg flex items-start gap-2 text-left">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-red-400 font-medium">{licenseError}</p>
-            </div>
-          )}
+             {licenseError && (
+               <div className="mb-6 p-3 bg-red-950/40 border border-red-900/50 rounded-lg flex items-start gap-2 text-left">
+                 <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                 <p className="text-xs text-red-400 font-medium">{licenseError}</p>
+               </div>
+             )}
 
-          <button 
-            onClick={handleActivate}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-[0_0_20px_rgba(99,102,241,0.3)] active:scale-[0.98] uppercase tracking-widest text-xs flex items-center justify-center gap-2"
-          >
-            <ShieldCheck className="w-4 h-4" /> KÍCH HOẠT PHẦN MỀM
-          </button>
-        </div>
+             <button 
+               onClick={handleActivateManual}
+               className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-[0_0_20px_rgba(99,102,241,0.3)] active:scale-[0.98] uppercase tracking-widest text-xs flex items-center justify-center gap-2"
+             >
+               <ShieldCheck className="w-4 h-4" /> KÍCH HOẠT PHẦN MỀM
+             </button>
+           </div>
 
-        {/* ADMIN KEYGEN MODAL */}
+        {/* ADMIN KEYGEN MODAL (OFFLINE MODE) */}
         {showAdminPanel && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
             <div className="bg-slate-900 border border-pink-500/50 p-6 rounded-2xl shadow-2xl max-w-md w-full relative">
@@ -1161,28 +1122,19 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
 
               <div className="space-y-4">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Khóa Bí Mật (SECRET SALT)</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Khóa Bí Mật Của Bạn (SECRET SALT)</label>
                   <input 
-                    type="password" 
-                    value={adminSecretSalt}
-                    onChange={(e) => setAdminSecretSalt(e.target.value)}
-                    placeholder="Nhập khóa bí mật của bạn..."
+                    type="password" value={adminSecretSalt} onChange={(e) => setAdminSecretSalt(e.target.value)} placeholder="Nhập khóa gốc..."
                     className="w-full bg-slate-950 border border-slate-700 focus:border-pink-500 rounded-lg p-3 outline-none text-slate-200 text-sm font-mono text-center mb-3"
                   />
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">Mã Máy Của Khách</label>
                   <input 
-                    type="text" 
-                    value={adminInputId}
-                    onChange={(e) => setAdminInputId(e.target.value)}
-                    placeholder="VD: MC-XXXXXX"
+                    type="text" value={adminInputId} onChange={(e) => setAdminInputId(e.target.value)} placeholder="VD: MC-XXXXXX"
                     className="w-full bg-slate-950 border border-slate-700 focus:border-pink-500 rounded-lg p-3 outline-none text-slate-200 text-sm font-mono text-center"
                   />
                 </div>
                 
-                <button 
-                  onClick={handleGenerateKey}
-                  className="w-full bg-pink-600 hover:bg-pink-500 text-white font-bold py-3 rounded-lg transition-all uppercase tracking-widest text-xs"
-                >
+                <button onClick={handleGenerateKey} className="w-full bg-pink-600 hover:bg-pink-500 text-white font-bold py-3 rounded-lg transition-all uppercase tracking-widest text-xs">
                   Tạo Mã Kích Hoạt
                 </button>
 
@@ -1190,16 +1142,8 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
                   <div className="pt-4 border-t border-slate-800 mt-4">
                     <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1.5 block">Mã Kích Hoạt Trả Về</label>
                     <div className="flex bg-slate-950 border border-emerald-900/50 rounded-lg p-1">
-                      <input 
-                        type="text" 
-                        readOnly 
-                        value={adminGeneratedKey} 
-                        className="bg-transparent text-emerald-400 font-mono font-bold px-3 py-2 w-full outline-none text-xs text-center"
-                      />
-                      <button 
-                        onClick={() => copyToClipboardCustom(adminGeneratedKey, setCopiedKeyMsg)}
-                        className="bg-emerald-900/50 hover:bg-emerald-800 text-emerald-400 px-3 py-2 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5"
-                      >
+                      <input type="text" readOnly value={adminGeneratedKey} className="bg-transparent text-emerald-400 font-mono font-bold px-3 py-2 w-full outline-none text-xs text-center" />
+                      <button onClick={() => copyToClipboardCustom(adminGeneratedKey, setCopiedKeyMsg)} className="bg-emerald-900/50 hover:bg-emerald-800 text-emerald-400 px-3 py-2 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5">
                         {copiedKeyMsg ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
@@ -1214,7 +1158,9 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
     );
   }
 
-  // Hiển thị giao diện chính
+  // ==========================================
+  // RENDER: MAIN APP (ĐÃ KÍCH HOẠT)
+  // ==========================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans selection:bg-blue-500/30">
       <div className="max-w-6xl mx-auto">
@@ -1225,8 +1171,16 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
             </h1>
             <p className="text-slate-400 mt-1 uppercase tracking-widest text-[10px] font-bold">Hero Object Extraction & Strict Style Cloning</p>
           </div>
-          <div className="text-[10px] text-slate-500 flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800">
-            <ShieldCheck className="w-3 h-3 text-emerald-400"/> Bản quyền: {deviceId}
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => { setTempApiKey(userApiKey); setShowApiModal(true); }} 
+              className="text-[10px] text-slate-400 hover:text-slate-200 flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800 transition-colors"
+            >
+              <Settings2 className="w-3 h-3"/> Cài đặt API
+            </button>
+            <div className="text-[10px] text-slate-500 flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 rounded-full border border-slate-800">
+              <ShieldCheck className="w-3 h-3 text-emerald-400"/> Bản quyền: {deviceId}
+            </div>
           </div>
         </header>
 
@@ -1235,6 +1189,40 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
             <AlertCircle className="w-5 h-5 shrink-0" />
             <p className="text-xs font-bold">{error}</p>
             <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-300"><X className="w-4 h-4" /></button>
+          </div>
+        )}
+
+        {/* MODAL NHẬP API KEY */}
+        {showApiModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <div className="bg-slate-900 border border-indigo-500/50 rounded-2xl p-6 max-w-xl w-full shadow-2xl relative">
+              <button onClick={() => setShowApiModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800 rounded-full p-1"><X className="w-5 h-5"/></button>
+              <h3 className="text-xl font-bold text-indigo-400 mb-4 flex items-center gap-2 border-b border-slate-800 pb-3"><Key className="w-6 h-6"/> Cài Đặt Gemini API Key</h3>
+              <div className="text-sm text-slate-300 space-y-4 mb-6">
+                <p>Để phần mềm có thể sử dụng trí tuệ nhân tạo đọc ảnh và viết lệnh, bạn cần cung cấp một <b>API Key miễn phí</b> từ Google.</p>
+                <ol className="list-decimal pl-5 space-y-2 text-slate-400 text-xs">
+                  <li>Truy cập <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">Google AI Studio</a>.</li>
+                  <li>Đăng nhập bằng tài khoản Google của bạn.</li>
+                  <li>Bấm nút <strong>Create API key</strong> và copy đoạn mã đó.</li>
+                  <li>Dán vào ô bên dưới và lưu lại. Mã này chỉ được lưu trên máy của bạn, hoàn toàn bảo mật.</li>
+                </ol>
+                <input 
+                  type="password" 
+                  value={tempApiKey}
+                  onChange={(e) => setTempApiKey(e.target.value)}
+                  placeholder="VD: AIzaSyD-..."
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-lg p-3 outline-none text-slate-200 text-sm font-mono mt-4 placeholder:text-slate-600 text-center"
+                />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setShowApiModal(false)} className="px-5 py-2 rounded-lg text-sm font-bold text-slate-400 hover:bg-slate-800 transition-colors">Hủy bỏ</button>
+                <button onClick={() => {
+                  setUserApiKey(tempApiKey);
+                  localStorage.setItem('diorama_gemini_api_key', tempApiKey);
+                  setShowApiModal(false);
+                }} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-bold transition-colors">Lưu API Key</button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1854,6 +1842,14 @@ NEGATIVE: ${isCloneMode ? 'creative deviation, altered composition, redesigned o
                       <p className="text-[13px] text-slate-400 max-w-md mx-auto leading-relaxed">
                         Toàn bộ 20+ hệ thống kỹ thuật cốt lõi (Art Direction, Đa dạng góc máy, Tâm lý thị giác, Chống lỗi AI...) đã được nén hoàn chỉnh.
                       </p>
+                      
+                      {/* MẸO CHO CHẾ ĐỘ BIỂN HIỆU STRICT */}
+                      {isSignboardMode && signboardLayoutMode === 'strict' && contentImages.length > 0 && (
+                        <div className="mx-auto w-[80%] mt-4 p-3 bg-pink-900/30 border border-pink-500/50 rounded-lg text-[11px] text-pink-300 text-left">
+                          <strong className="text-pink-400 block mb-1">MẸO QUAN TRỌNG:</strong> 
+                          Để AI giữ y hệt bản vẽ tay, khi chạy lệnh này bên Midjourney, bạn hãy <b>kéo thả bức ảnh vẽ tay của bạn vào</b> và copy kèm theo Prompt này (dùng tính năng Image Prompt hoặc `--cref`).
+                        </div>
+                      )}
                     </div>
 
                     <button 
